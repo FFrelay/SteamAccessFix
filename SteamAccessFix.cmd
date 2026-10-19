@@ -14,13 +14,13 @@ if %errorlevel% neq 0 (
 )
 
 :: Chay phan PowerShell ben duoi file
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s=[IO.File]::ReadAllText($env:SELF,[Text.Encoding]::UTF8); $i=$s.IndexOf('#PSBEGIN'+'#'); iex $s.Substring($i)"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression ([System.IO.File]::ReadAllText($env:SELF, [System.Text.Encoding]::UTF8))"
 exit /b
 : end batch / begin powershell #>
 
 #PSBEGIN#
 # ================================================================
-#  SteamAccessFix v1.1.5 - All-In-One Game & Store Fix (Windows)
+#  SteamAccessFix v1.2.0 - All-In-One Game & Store Fix (Windows)
 #  Pure User-Mode  |  No Drivers  |  Anti-Cheat Safe
 #  Tham so dong lenh: /silent (chay ngam) | /install (tu khoi dong) | /uninstall | /stop
 # ================================================================
@@ -33,7 +33,7 @@ $ProgressPreference    = 'SilentlyContinue'
 $OutputEncoding           = [System.Text.Encoding]::UTF8
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-$Host.UI.RawUI.WindowTitle = 'SteamAccessFix v1.1.5'
+$Host.UI.RawUI.WindowTitle = 'SteamAccessFix v1.2.0'
 
 # Luu tham so dong lenh neu goi truc tiep tu PowerShell
 if (-not $env:SAF_ARGS -and $args) { $env:SAF_ARGS = ($args -join ' ') }
@@ -43,11 +43,30 @@ function Has-Arg($ten) {
 }
 
 # --- Cau hinh ---
-$script:AppVersion  = '1.1.5'
+$script:AppVersion  = '1.2.0'
 $script:GitHubRepo  = 'vuviett47/SteamAccessFix'
 $script:AutoUpdate  = $false
-$script:DnsMode     = 'Google' # 'Google' (Mac dinh) hoac 'Keep' (Giu nguyen DNS he thong)
-if (Has-Arg 'nodns' -or Has-Arg 'keepdns') { $script:DnsMode = 'Keep' }
+$script:DnsPresets = @(
+    @{ Id = 1;  Name = 'Google DNS';        Short = 'Google';     P1 = '8.8.8.8';         P2 = '8.8.4.4' }
+    @{ Id = 2;  Name = 'Cloudflare DNS';    Short = 'Cloudflare'; P1 = '1.1.1.1';         P2 = '1.0.0.1' }
+    @{ Id = 3;  Name = 'Control D';         Short = 'Control D';  P1 = '76.76.2.0';       P2 = '76.76.10.0' }
+    @{ Id = 4;  Name = 'Quad9';             Short = 'Quad9';      P1 = '9.9.9.9';         P2 = '149.112.112.112' }
+    @{ Id = 5;  Name = 'OpenDNS (Cisco)';   Short = 'OpenDNS';    P1 = '208.67.222.222';   P2 = '208.67.220.220' }
+    @{ Id = 6;  Name = 'AdGuard';           Short = 'AdGuard';    P1 = '94.140.14.14';    P2 = '94.140.15.15' }
+    @{ Id = 7;  Name = 'NextDNS';           Short = 'NextDNS';    P1 = '45.90.28.0';      P2 = '45.90.30.0' }
+    @{ Id = 8;  Name = 'AliDNS (Alibaba)';  Short = 'AliDNS';     P1 = '223.5.5.5';       P2 = '223.6.6.6' }
+    @{ Id = 9;  Name = 'DNS.SB (HongKong)'; Short = 'DNS.SB';     P1 = '185.222.222.222'; P2 = '45.11.45.11' }
+    @{ Id = 10; Name = 'Comodo Secure';     Short = 'Comodo';     P1 = '8.26.56.26';      P2 = '8.20.247.20' }
+)
+$script:DnsMode           = 'Google'
+$script:CurrentDnsName    = 'Google DNS'
+$script:CurrentDnsShort   = 'Google'
+$script:CurrentDnsServers = @('8.8.8.8', '8.8.4.4')
+if (Has-Arg 'nodns' -or Has-Arg 'keepdns') {
+    $script:DnsMode         = 'Keep'
+    $script:CurrentDnsName  = 'Giu nguyen DNS he thong'
+    $script:CurrentDnsShort = 'He thong'
+}
 
 # Dam bao duong dan SELF luon chinh xac khi chay tu file
 if (-not $env:SELF -or -not (Test-Path $env:SELF)) {
@@ -77,6 +96,7 @@ $FileDns       = Join-Path $ThuMucLuu 'dns-backup.json'
 $FileProxy     = Join-Path $ThuMucLuu 'proxy-backup.json'
 $FileHosts     = Join-Path $ThuMucLuu 'hosts-backup.txt'
 $FileNetTweaks = Join-Path $ThuMucLuu 'net-tweaks-backup.json'
+$FileMtu       = Join-Path $ThuMucLuu 'mtu-backup.json'
 $FileDnsKeep   = Join-Path $ThuMucLuu 'dns-original-keep.json'
 $FileStop      = Join-Path $ThuMucLuu 'stop.flag'
 $FileInst      = Join-Path $ThuMucLuu 'instance.txt'
@@ -101,6 +121,8 @@ $script:DaThayDoiDns    = $false
 $script:DaThayDoiProxy  = $false
 $script:DaThayDoiHosts  = $false
 $script:DaThayDoiTweaks = $false
+$script:DaThayDoiMtu    = $false
+$script:CurrentMtu      = 0
 $script:Proxy           = $null
 $script:CongDangDung    = 0
 $script:MoTa            = ''
@@ -135,21 +157,28 @@ function Ve-Khung($tieuDe, $phuDe = '', $mau = 'Cyan') {
 $MaProxy = @'
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 public class FastWebClient : WebClient
 {
     public int TimeoutMs = 3000;
+    public FastWebClient() {
+        this.Proxy = null;
+    }
     protected override WebRequest GetWebRequest(Uri uri) {
         WebRequest w = base.GetWebRequest(uri);
         w.Timeout = TimeoutMs;
+        w.Proxy = null;
         return w;
     }
 }
@@ -561,6 +590,282 @@ public class SplitProxy
         }
     }
 }
+
+public class ConsoleHelper
+{
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    [DllImport("wininet.dll", SetLastError = true)]
+    public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l);
+
+    [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache")]
+    public static extern int DnsFlushResolverCache();
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    public static void HideConsole()
+    {
+        try {
+            IntPtr h = GetConsoleWindow();
+            if (h != IntPtr.Zero) ShowWindow(h, 0);
+        } catch { }
+    }
+
+    public static void ShowConsole()
+    {
+        try {
+            IntPtr h = GetConsoleWindow();
+            if (h != IntPtr.Zero) {
+                ShowWindow(h, 9);
+                SetForegroundWindow(h);
+            }
+        } catch { }
+    }
+
+    public static void DisableQuickEdit()
+    {
+        try {
+            IntPtr h = GetStdHandle(-10); // STD_INPUT_HANDLE = -10
+            uint mode;
+            if (GetConsoleMode(h, out mode)) {
+                mode &= ~0x0040u; // disable ENABLE_QUICK_EDIT_MODE (0x0040)
+                mode |= 0x0080u;  // enable ENABLE_EXTENDED_FLAGS (0x0080)
+                SetConsoleMode(h, mode);
+            }
+        } catch { }
+    }
+}
+
+public class NativeCleanup
+{
+    private delegate bool ConsoleCtrlDelegate(int sig);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleCtrlHandler(ConsoleCtrlDelegate handler, bool add);
+
+    private static ConsoleCtrlDelegate handler;
+    public static volatile bool IsActive = false;
+
+    public static void Register()
+    {
+        if (handler == null) {
+            handler = new ConsoleCtrlDelegate(HandlerRoutine);
+            SetConsoleCtrlHandler(handler, true);
+        }
+    }
+
+    public static void Unregister()
+    {
+        if (handler != null) {
+            SetConsoleCtrlHandler(handler, false);
+            handler = null;
+        }
+    }
+
+    private static bool HandlerRoutine(int sig)
+    {
+        if (IsActive) {
+            try {
+                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings", true)) {
+                    if (k != null) {
+                        k.DeleteValue("AutoConfigURL", false);
+                        k.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
+                        k.DeleteValue("ProxyServer", false);
+                    }
+                }
+                ConsoleHelper.InternetSetOption(IntPtr.Zero, 39, IntPtr.Zero, 0);
+                ConsoleHelper.InternetSetOption(IntPtr.Zero, 37, IntPtr.Zero, 0);
+            } catch { }
+        }
+        return false;
+    }
+}
+
+public class MtuFinder
+{
+    public static int FindBestMtu(string target = "8.8.8.8")
+    {
+        IPAddress ip;
+        if (!IPAddress.TryParse(target, out ip)) ip = IPAddress.Parse("8.8.8.8");
+
+        using (var p = new Ping())
+        {
+            var options = new PingOptions { DontFragment = true, Ttl = 64 };
+            byte[] buf1472 = new byte[1472];
+
+            try {
+                var reply = p.Send(ip, 500, buf1472, options);
+                if (reply != null && reply.Status == IPStatus.Success) return 1500;
+            } catch { }
+
+            int low = 1360;
+            int high = 1472;
+            int bestPayload = -1;
+
+            while (low <= high)
+            {
+                int mid = (low + high) / 2;
+                byte[] testBuf = new byte[mid];
+                try {
+                    var reply = p.Send(ip, 450, testBuf, options);
+                    if (reply != null && reply.Status == IPStatus.Success) {
+                        bestPayload = mid;
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
+                    }
+                } catch {
+                    high = mid - 1;
+                }
+            }
+
+            if (bestPayload > 0) return bestPayload + 28;
+            return 1492;
+        }
+    }
+}
+
+public class GameWatcher
+{
+    private static Thread watcherThread;
+    private static volatile bool isRunning = false;
+    private static HashSet<string> knownProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly string[] targetGames = new string[] {
+        "tslgame", "steam", "cs2", "dota2", "narakabladepoint", "deltaforce"
+    };
+
+    public static volatile string LastTriggeredGame = null;
+
+    public static void Start()
+    {
+        if (isRunning) return;
+        isRunning = true;
+
+        try {
+            foreach (var p in Process.GetProcesses()) {
+                try { knownProcesses.Add(p.ProcessName); } catch { }
+            }
+        } catch { }
+
+        watcherThread = new Thread(() => {
+            while (isRunning) {
+                try {
+                    Thread.Sleep(2500);
+                    if (!isRunning) break;
+
+                    var current = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var p in Process.GetProcesses()) {
+                        try { current.Add(p.ProcessName); } catch { }
+                    }
+
+                    foreach (var game in targetGames) {
+                        if (current.Contains(game) && !knownProcesses.Contains(game)) {
+                            ConsoleHelper.DnsFlushResolverCache();
+                            LastTriggeredGame = game;
+                        }
+                    }
+                    knownProcesses = current;
+                } catch { }
+            }
+        });
+        watcherThread.IsBackground = true;
+        watcherThread.Start();
+    }
+
+    public static void Stop()
+    {
+        isRunning = false;
+    }
+}
+
+public class FastUpdater
+{
+    public static volatile string RemoteVersion = null;
+    public static volatile bool IsChecked = false;
+
+    public static void CheckAsync(string repo)
+    {
+        if (string.IsNullOrEmpty(repo) || repo == "USERNAME/REPOSITORY") return;
+        ThreadPool.QueueUserWorkItem(_ => {
+            try {
+                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                string url = "https://raw.githubusercontent.com/" + repo + "/main/VERSION.txt?t=" + now;
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.Timeout = 2000;
+                req.ReadWriteTimeout = 2000;
+                req.Proxy = null;
+                req.Method = "GET";
+                using (HttpWebResponse res = (HttpWebResponse)req.GetResponse()) {
+                    if (res.StatusCode == HttpStatusCode.OK) {
+                        using (StreamReader r = new StreamReader(res.GetResponseStream())) {
+                            RemoteVersion = r.ReadToEnd().Trim();
+                        }
+                    }
+                }
+            } catch { }
+            IsChecked = true;
+        });
+    }
+}
+
+public class DnsPinger
+{
+    public class Result {
+        public int Id;
+        public string Name;
+        public string ShortName;
+        public string Primary;
+        public string Secondary;
+        public long PingMs;
+    }
+
+    public static List<Result> TestAll(string[] data) {
+        var results = new ConcurrentBag<Result>();
+        var tasks = new List<Task>();
+
+        foreach (var item in data) {
+            var parts = item.Split('|');
+            if (parts.Length < 5) continue;
+            int id = int.Parse(parts[0]);
+            string name = parts[1];
+            string shortName = parts[2];
+            string p1 = parts[3];
+            string p2 = parts[4];
+
+            tasks.Add(Task.Run(() => {
+                long ping = -1;
+                try {
+                    IPAddress ip;
+                    if (IPAddress.TryParse(p1, out ip)) {
+                        using (var p = new Ping()) {
+                            var reply = p.Send(ip, 1000);
+                            if (reply.Status == IPStatus.Success) {
+                                ping = reply.RoundtripTime;
+                            }
+                        }
+                    }
+                } catch { }
+                results.Add(new Result { Id = id, Name = name, ShortName = shortName, Primary = p1, Secondary = p2, PingMs = ping });
+            }));
+        }
+
+        Task.WaitAll(tasks.ToArray());
+        var list = new List<Result>(results);
+        list.Sort((a, b) => a.Id.CompareTo(b.Id));
+        return list;
+    }
+}
 '@
 
 # ================================================================
@@ -592,14 +897,29 @@ function Get-NsReg($guid, [int]$fam = 4) {
     return @(Split-Ns $p.NameServer)
 }
 
+$script:CachedAdapters = $null
+function Get-ActiveAdapters {
+    if ($null -eq $script:CachedAdapters -or $script:CachedAdapters.Count -eq 0) {
+        $adapters = @(Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object Status -eq 'Up')
+        if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -EA SilentlyContinue | Where-Object Status -eq 'Up') }
+        if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -EA SilentlyContinue) }
+        $script:CachedAdapters = $adapters
+    }
+    return $script:CachedAdapters
+}
+
+function Flush-DnsCache {
+    try { [ConsoleHelper]::DnsFlushResolverCache() | Out-Null }
+    catch { ipconfig /flushdns 2>&1 | Out-Null }
+}
+
 function Get-AdapterIsStatic($idx) {
     try { return ((Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -EA Stop).Dhcp -eq 'Disabled') } catch { return $false }
 }
 
 function Save-Dns {
     if (Test-Path $FileDns) { return }
-    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue)
-    if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue) }
+    $adapters = Get-ActiveAdapters
     $ds = foreach ($a in $adapters) {
         [pscustomobject]@{
             Index    = $a.ifIndex
@@ -662,7 +982,6 @@ function Set-DnsSafe($nic, [string[]]$v4, [string[]]$v6) {
 
     # Kiem tra lai registry
     $want = $v4 -join ','
-    Start-Sleep -Milliseconds 120
     $curReg = @(Get-NsReg $guid 4)
     if (($curReg -join ',') -ne $want -and $v4.Count -gt 0) {
         # Fallback netsh: dung cu phap chuan Microsoft (set source=static truoc, add dnsservers sau)
@@ -670,7 +989,6 @@ function Set-DnsSafe($nic, [string[]]$v4, [string[]]$v6) {
         for ($i = 1; $i -lt $v4.Count; $i++) {
             netsh interface ipv4 add dnsservers name="$idx" address=$($v4[$i]) index=($i + 1) validate=no 2>&1 | Out-Null
         }
-        Start-Sleep -Milliseconds 100
         $curReg = @(Get-NsReg $guid 4)
     }
 
@@ -679,8 +997,7 @@ function Set-DnsSafe($nic, [string[]]$v4, [string[]]$v6) {
 
 # Luoi an toan: card mang IP tinh ma DNS bi trong => dat DNS du phong (Gateway + 8.8.8.8) de khong mat mang
 function Ensure-StaticDns {
-    $adapters = @(Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object Status -eq 'Up')
-    if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -EA SilentlyContinue | Where-Object Status -eq 'Up') }
+    $adapters = Get-ActiveAdapters
     foreach ($a in $adapters) {
         if (-not (Get-AdapterIsStatic $a.ifIndex)) { continue }
         if (@(Get-NsReg $a.InterfaceGuid 4).Count -gt 0) { continue }
@@ -698,8 +1015,7 @@ function Ensure-StaticDns {
 }
 
 function Show-Dns {
-    $adapters = @(Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object Status -eq 'Up')
-    if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -EA SilentlyContinue | Where-Object Status -eq 'Up') }
+    $adapters = Get-ActiveAdapters
     foreach ($a in $adapters) {
         $d = @(Get-NsReg $a.InterfaceGuid 4)
         if ($d.Count -gt 0) { $t = $d -join ', ' } else { $t = '(tu dong - DHCP)' }
@@ -751,35 +1067,39 @@ function Restore-Dns([string]$src = $FileDns) {
         if ($allOk) { Remove-Item $src -Force -EA SilentlyContinue }
     }
     Ensure-StaticDns
-    ipconfig /flushdns | Out-Null
+    Flush-DnsCache
     $script:DaThayDoiDns = $false
 }
 
-function Set-GoogleDns {
+function Set-CustomDns($name, $short, [string[]]$servers) {
     Save-Dns
-    $script:DaThayDoiDns = $true
-    $adapters = @(Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object Status -eq 'Up')
-    if ($adapters.Count -eq 0) { $adapters = @(Get-NetAdapter -EA SilentlyContinue | Where-Object Status -eq 'Up') }
+    $script:DaThayDoiDns      = $true
+    $script:DnsMode           = $short
+    $script:CurrentDnsName    = $name
+    $script:CurrentDnsShort   = $short
+    $script:CurrentDnsServers = $servers
+
+    $adapters = Get-ActiveAdapters
     $allOk = $true
     foreach ($a in $adapters) {
-        $r = Set-DnsSafe $a @('8.8.8.8', '8.8.4.4') @('2001:4860:4860::8888', '2001:4860:4860::8844')
+        $r = Set-DnsSafe $a $servers @()
         if (-not $r) { $allOk = $false }
     }
-    ipconfig /flushdns | Out-Null
-    Start-Sleep -Milliseconds 300
+    Flush-DnsCache
     return $allOk
+}
+
+function Set-GoogleDns {
+    return (Set-CustomDns 'Google DNS' 'Google' @('8.8.8.8', '8.8.4.4'))
 }
 
 # ================================================================
 #  QUAN LY PROXY (PAC + SplitProxy)
 # ================================================================
 function Notify-Inet {
-    if (-not ('Win.Inet' -as [type])) {
-        try { Add-Type -Namespace Win -Name Inet -MemberDefinition '[System.Runtime.InteropServices.DllImport("wininet.dll")] public static extern bool InternetSetOption(System.IntPtr h, int o, System.IntPtr b, int l);' -EA SilentlyContinue } catch { }
-    }
     try {
-        [Win.Inet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-        [Win.Inet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+        [ConsoleHelper]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+        [ConsoleHelper]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
     } catch { }
 }
 
@@ -882,6 +1202,7 @@ function Start-ProxyMode([int]$mode = 2) {
         try { Add-Type -TypeDefinition $MaProxy -Language CSharp -EA Stop }
         catch { Err "Khong khoi tao duoc proxy: $($_.Exception.Message)"; return $false }
     }
+    if ('ConsoleHelper' -as [type]) { [ConsoleHelper]::DisableQuickEdit() }
     if ('NativeCleanup' -as [type]) { [NativeCleanup]::Register() }
 
     if ($script:Proxy) {
@@ -932,10 +1253,10 @@ function Start-ProxyMode([int]$mode = 2) {
 # ================================================================
 function Apply-PubgHosts {
     Save-Hosts
+    # Chi can thiep duy nhat domain sanh cho (prod-live-front) de vuot man hinh khoi.
+    # Anti-cheat (xenuine) va match API de di TRUC TIEP 100% de tranh loi Network Lag Detected giua tran.
     $domainsToMap = @(
-        'prod-live-front.playbattlegrounds.com',
-        'prod-live-xenuine.playbattlegrounds.com',
-        'api.pubg.com'
+        'prod-live-front.playbattlegrounds.com'
     )
     $linesToAdd = $domainsToMap | ForEach-Object { "127.0.0.1 $_ # SteamAccessFix" }
     try {
@@ -943,7 +1264,7 @@ function Apply-PubgHosts {
         $filtered = @($cur | Where-Object { $_ -notmatch '#\s*SteamAccessFix' })
         $newContent = ($filtered + $linesToAdd) -join "`r`n"
         [IO.File]::WriteAllText($FileHostsSys, $newContent + "`r`n", [Text.Encoding]::ASCII)
-        ipconfig /flushdns 2>&1 | Out-Null
+        Flush-DnsCache
         $script:DaThayDoiHosts = $true
         return $true
     } catch {
@@ -961,7 +1282,7 @@ function Restore-Hosts {
         try {
             $lines = @(Get-Content $FileHostsSys -EA SilentlyContinue | Where-Object { $_ -notmatch '#\s*SteamAccessFix' })
             [IO.File]::WriteAllLines($FileHostsSys, [string[]]$lines, [Text.Encoding]::ASCII)
-            ipconfig /flushdns 2>&1 | Out-Null
+            Flush-DnsCache
         } catch { }
     }
     if (Test-Path $FileHosts) {
@@ -1003,11 +1324,112 @@ function Restore-GamingNetworkTweaks {
     $script:DaThayDoiTweaks = $false
 }
 
+function Optimize-Mtu {
+    Say ''
+    Info 'Dang do MTU toi uu bang goi tin ICMP khong phan manh...'
+    $bestMtu = [MtuFinder]::FindBestMtu()
+    Ok "MTU toi uu phat hien: $bestMtu (Kich thuoc lon nhat khong bi cat boi nha mang)"
+
+    $adapters = Get-ActiveAdapters
+    if (-not (Test-Path $FileMtu)) {
+        $backup = @()
+        foreach ($a in $adapters) {
+            $curMtu = (Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -EA SilentlyContinue).NlMtu
+            if ($curMtu) {
+                $backup += [pscustomobject]@{ Index = $a.ifIndex; Mtu = $curMtu }
+            }
+        }
+        @($backup) | ConvertTo-Json | Set-Content -Path $FileMtu -Encoding ASCII
+    }
+
+    foreach ($a in $adapters) {
+        try {
+            Set-NetIPInterface -InterfaceIndex $a.ifIndex -NlMtu $bestMtu -EA Stop | Out-Null
+        } catch {
+            netsh interface ipv4 set subinterface "$($a.ifIndex)" mtu=$bestMtu store=persistent 2>&1 | Out-Null
+        }
+    }
+    $script:DaThayDoiMtu = $true
+    $script:CurrentMtu   = $bestMtu
+    Ok "Da thiet lap MTU = $bestMtu tren cac card mang dang ket noi!"
+    Info "Goi tin game se khong bi phan manh tren router, toi uu hoa hitreg va ping."
+}
+
+function Restore-Mtu {
+    if (Test-Path $FileMtu) {
+        try {
+            $items = Get-Content $FileMtu -Raw | ConvertFrom-Json
+            foreach ($item in @($items)) {
+                try {
+                    Set-NetIPInterface -InterfaceIndex $item.Index -NlMtu $item.Mtu -EA Stop | Out-Null
+                } catch {
+                    netsh interface ipv4 set subinterface "$($item.Index)" mtu=$item.Mtu store=persistent 2>&1 | Out-Null
+                }
+            }
+            Remove-Item $FileMtu -Force -EA SilentlyContinue
+        } catch { }
+    }
+    $script:DaThayDoiMtu = $false
+    $script:CurrentMtu   = 0
+}
+
+function Minimize-ToTray {
+    Add-Type -AssemblyName System.Windows.Forms -EA SilentlyContinue
+    Add-Type -AssemblyName System.Drawing -EA SilentlyContinue
+
+    $ni = New-Object System.Windows.Forms.NotifyIcon
+    $ni.Text = "SteamAccessFix - Dang chay ngam"
+    $ni.Icon = [System.Drawing.SystemIcons]::Shield
+    $ni.Visible = $true
+
+    $cm = New-Object System.Windows.Forms.ContextMenu
+    $itemOpen = $cm.MenuItems.Add('Mo cua so SteamAccessFix')
+    $itemExit = $cm.MenuItems.Add('Thoat & Khoi phuc cai dat')
+    $ni.ContextMenu = $cm
+
+    $script:TrayShouldRestore = $false
+    $script:TrayShouldExit    = $false
+
+    $actionOpen = {
+        $script:TrayShouldRestore = $true
+    }
+    $actionExit = {
+        $script:TrayShouldExit = $true
+    }
+
+    $itemOpen.add_Click($actionOpen)
+    $itemExit.add_Click($actionExit)
+    $ni.add_DoubleClick($actionOpen)
+
+    # An cua so console
+    [ConsoleHelper]::HideConsole()
+
+    # Thong bao tren khay he thong
+    $ni.ShowBalloonTip(2000, "SteamAccessFix v$script:AppVersion", "Tool dang chay ngam giup vuot chan game.`nClick dup vao bieu tuong de mo lai.", [System.Windows.Forms.ToolTipIcon]::Info)
+
+    while (-not $script:TrayShouldRestore -and -not $script:TrayShouldExit) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 150
+    }
+
+    $ni.Visible = $false
+    $ni.Dispose()
+
+    # Hien lai cua so console
+    [ConsoleHelper]::ShowConsole()
+
+    if ($script:TrayShouldExit) {
+        return 'exit'
+    }
+    return 'restore'
+}
+
 function Restore-All {
     Say ''
     Info 'Dang khoi phuc toan bo cai dat ve trang thai goc...'
     Stop-ProxyMode
     Restore-GamingNetworkTweaks
+    Restore-Mtu
     Restore-Hosts
     Restore-Dns
     Ok 'He thong da duoc khoi phuc sach se.'
@@ -1015,113 +1437,243 @@ function Restore-All {
 }
 
 # ================================================================
-#  KIEM TRA CAP NHAT GITHUB
+#  CAP NHAT GITHUB
 # ================================================================
-function Check-GitHubUpdate {
-    if ([string]::IsNullOrWhiteSpace($script:GitHubRepo) -or $script:GitHubRepo -eq 'USERNAME/REPOSITORY') { return }
+function Update-FromGitHub {
     if (-not $env:SELF -or -not (Test-Path $env:SELF)) { return }
     try {
-        Info "Kiem tra cap nhat tu GitHub..."
+        Info 'Dang tai ban cap nhat tu GitHub...'
         $tNow = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $remoteVer = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$($script:GitHubRepo)/main/VERSION.txt?t=$tNow" -Headers @{ 'Cache-Control' = 'no-cache' } -TimeoutSec 4 -EA Stop).ToString().Trim()
-
-        if (-not $remoteVer) { return }
-
-        $isNewer = $false
-        try {
-            $rVer = [version]$remoteVer
-            $cVer = [version]$script:AppVersion
-            if ($rVer -gt $cVer) { $isNewer = $true }
-        } catch {
-            if ($remoteVer -ne $script:AppVersion) { $isNewer = $true }
-        }
-
-        if (-not $isNewer) {
-            Ok "Dang dung phien ban moi nhat (v$script:AppVersion)."
-            return
-        }
-
-        Say ''
-        Ve-Khung "  CO PHIEN BAN CHINH THUC: v$remoteVer  (hien tai: v$script:AppVersion)" '' 'Green'
-        Say '    [1]  Cap nhat / Dong bo ngay' 'Yellow'
-        Say '    [2]  Bo qua, chay ban hien tai' 'Gray'
-        Say ''
-
-        $choice = '1'
-        if (-not $script:AutoUpdate) {
-            while ($true) {
-                Write-Host '  Chon 1 hoac 2 [Enter = 1]: ' -ForegroundColor DarkGray -NoNewline
-                $r = Read-Host
-                if ($r -eq '' -or $r -eq '1') { $choice = '1'; break }
-                elseif ($r -eq '2')            { $choice = '2'; break }
-            }
-        }
-
-        if ($choice -eq '1') {
-            Info 'Dang tai ban cap nhat tu GitHub...'
-            $tmp = Join-Path $env:TEMP ("SAF_update_" + [guid]::NewGuid().ToString('N') + ".cmd")
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$($script:GitHubRepo)/main/SteamAccessFix.cmd?t=$tNow" -Headers @{ 'Cache-Control' = 'no-cache' } -OutFile $tmp -TimeoutSec 15 -EA Stop
-            $content = [IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8)
-            if ($content.Contains('#PSBEGIN#') -and $content.Length -gt 2000) {
-                Ok 'Xac thuc goi cap nhat hop le.'
-                Ok "Da ghi de cap nhat vao: $env:SELF"
-                Copy-Item -Path $tmp -Destination $env:SELF -Force
-                Remove-Item $tmp -Force -EA SilentlyContinue
-                Info 'Dang khoi dong lai phien ban moi...'
-                Start-Sleep -Milliseconds 600
-                Start-Process -FilePath $env:SELF -WorkingDirectory (Split-Path $env:SELF)
-                exit
-            } else {
-                Err 'Goi cap nhat khong hop le. Da huy.'
-                Remove-Item $tmp -Force -EA SilentlyContinue
-            }
-        } else {
-            Info 'Bo qua cap nhat. Tiep tuc chay ban hien tai...'
+        $tmp = Join-Path $env:TEMP ("SAF_update_" + [guid]::NewGuid().ToString('N') + ".cmd")
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$($script:GitHubRepo)/main/SteamAccessFix.cmd?t=$tNow" -Headers @{ 'Cache-Control' = 'no-cache' } -OutFile $tmp -TimeoutSec 15 -EA Stop
+        $content = [IO.File]::ReadAllText($tmp, [Text.Encoding]::UTF8)
+        if ($content.Contains('#PSBEGIN#') -and $content.Length -gt 2000) {
+            Ok 'Xac thuc goi cap nhat hop le.'
+            Ok "Da ghi de cap nhat vao: $env:SELF"
+            Copy-Item -Path $tmp -Destination $env:SELF -Force
+            Remove-Item $tmp -Force -EA SilentlyContinue
+            Info 'Dang khoi dong lai phien ban moi...'
             Start-Sleep -Milliseconds 600
+            Start-Process -FilePath $env:SELF -WorkingDirectory (Split-Path $env:SELF)
+            exit
+        } else {
+            Err 'Goi cap nhat khong hop le. Da huy.'
+            Remove-Item $tmp -Force -EA SilentlyContinue
         }
-    } catch { }
+    } catch {
+        Err "Loi khi tai cap nhat: $($_.Exception.Message)"
+    }
 }
 
 # ================================================================
 #  MAN HINH TRANG THAI & PHIM TAT RUNTIME
 # ================================================================
-function Show-StatusBar {
-    $lvlText = switch ($script:CurrentLevel) {
-        1 { 'Cap do 1 - DNS Google (8.8.8.8) + Toi uu Ping' }
-        2 { "Cap do 2 - SplitProxy SNI (Phan manh TLS) | Port $($script:CongDangDung)" }
-        default { "Cap do $($script:CurrentLevel)" }
+function Show-DnsMenu {
+    $pingData = @()
+    foreach ($p in $script:DnsPresets) {
+        $pingData += "$($p.Id)|$($p.Name)|$($p.Short)|$($p.P1)|$($p.P2)"
     }
-    Say ''
-    Ve-Khung "  HE THONG HOAT DONG  -  SAN SANG VAO GAME" "  $lvlText" 'Green'
-    Say '  Pham vi ho tro: Steam, PUBG, CS2, Dota 2, Naraka, Delta Force' 'DarkGreen'
-    if ($script:DaThayDoiHosts) {
-        Say '  PUBG Direct Sniper: Kich hoat (Port 443 + Hosts + Anti-Disconnect)' 'Green'
-    }
-    Say '  Luu luong tran dau UDP di TRUC TIEP (0ms overhead, anti-cheat safe)' 'DarkGray'
 
-    $hasStatic = $false
-    foreach ($nic in @(Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object Status -eq 'Up')) {
-        if (Get-AdapterIsStatic $nic.ifIndex) { $hasStatic = $true; break }
+    $measureAll = {
+        $map = @{}
+        $fastId = -1
+        $minP = 999999
+        try {
+            $res = [DnsPinger]::TestAll([string[]]$pingData)
+            foreach ($r in $res) {
+                $map[$r.Id] = $r.PingMs
+                if ($r.PingMs -ge 0 -and $r.PingMs -lt $minP) {
+                    $minP = $r.PingMs
+                    $fastId = $r.Id
+                }
+            }
+        } catch { }
+        return @{ Map = $map; FastestId = $fastId; MinPing = $minP }
     }
-    if ($hasStatic) {
-        Say '  Phat hien card mang dung IP tinh (LAN Static IP) - Ho tro bao ve an toan 100%' 'Cyan'
+
+    # Tu dong do ping tat ca 10 DNS ngay khi mo menu (~70ms sieu toc)
+    $testResult = & $measureAll
+
+    while ($true) {
+        try { Clear-Host } catch { }
+        Say ''
+        Say "  [>] BANG DO PING & LUA CHON DNS CHO GAME" 'Cyan'
+        Sep
+        Say '  STT   Nha cung cap      May chu (IPv4)   Ping        Trang thai' 'DarkCyan'
+
+        foreach ($p in $script:DnsPresets) {
+            $idStr   = "[$($p.Id)]".PadRight(6)
+            $nameStr = $p.Name.PadRight(18)
+            $ipStr   = $p.P1.PadRight(17)
+
+            Write-Host "  $idStr$nameStr$ipStr" -ForegroundColor White -NoNewline
+
+            $ping = if ($testResult.Map.ContainsKey($p.Id)) { $testResult.Map[$p.Id] } else { -1 }
+            if ($ping -ge 0) {
+                $color = if ($ping -lt 40) { 'Green' } elseif ($ping -lt 80) { 'Yellow' } else { 'DarkYellow' }
+                Write-Host ("$ping ms").PadRight(12) -ForegroundColor $color -NoNewline
+            } else {
+                Write-Host ('Timeout'.PadRight(12)) -ForegroundColor DarkGray -NoNewline
+            }
+
+            $isCurrent = ($script:CurrentDnsShort -eq $p.Short)
+            $isFastest = ($p.Id -eq $testResult.FastestId)
+
+            if ($isCurrent -and $isFastest) {
+                Write-Host '[Dang dung | Nhanh nhat]' -ForegroundColor Green
+            } elseif ($isCurrent) {
+                Write-Host '[Dang dung]' -ForegroundColor Green
+            } elseif ($isFastest) {
+                Write-Host '[Nhanh nhat]' -ForegroundColor Cyan
+            } else {
+                Write-Host ''
+            }
+        }
+
+        Write-Host '  [0]   DNS goc he thong  (Khong doi DNS card mang)    ' -ForegroundColor White -NoNewline
+        if ($script:DnsMode -eq 'Keep') {
+            Write-Host '[Dang dung]' -ForegroundColor Green
+        } else {
+            Write-Host ''
+        }
+
+        Sep
+        Say '  [1-10]   Chon DNS theo so thu tu' 'White'
+        Say '  [0]      Tra ve DNS goc cua he thong (khong can thiep DNS card mang)' 'White'
+        if ($testResult.FastestId -gt 0) {
+            Say "  [F]      Chon nhanh DNS co Ping thap nhat ($($testResult.MinPing) ms)" 'Yellow'
+        }
+        Say '  [R]      Do lai Ping (Refresh)' 'Cyan'
+        Say '  [Enter]  Quay lai menu chinh' 'DarkGray'
+        Sep
+        Say ''
+        Write-Host '  Lua chon [1-10 / 0 / F / R / Enter]: ' -ForegroundColor Yellow -NoNewline
+        $ans = Read-Host
+
+        if ([string]::IsNullOrWhiteSpace($ans)) {
+            break
+        }
+        elseif ($ans -eq '0') {
+            Say ''
+            Info 'Dang tra lai DNS goc cua he thong...'
+            Restore-Dns
+            $script:DnsMode = 'Keep'
+            $script:CurrentDnsName = 'Giu nguyen DNS he thong'
+            $script:CurrentDnsShort = 'He thong'
+            $script:DaThayDoiDns = $false
+            Ok 'Da tra ve DNS he thong goc (Tool se GIU NGUYEN DNS card mang)!'
+            Start-Sleep -Milliseconds 400
+            break
+        }
+        elseif ($ans -match '^[rR]') {
+            $testResult = & $measureAll
+        }
+        elseif ($ans -match '^[fF]') {
+            if ($testResult.FastestId -gt 0) {
+                $preset = $script:DnsPresets | Where-Object { $_.Id -eq $testResult.FastestId } | Select-Object -First 1
+                if ($preset) {
+                    Say ''
+                    Info "Dang gan DNS nhanh nhat: $($preset.Name) ($($preset.P1), $($preset.P2))..."
+                    if (Set-CustomDns $preset.Name $preset.Short @($preset.P1, $preset.P2)) {
+                        Ok "Da chuyen sang: $($preset.Name) ($($testResult.MinPing) ms)!"
+                    } else {
+                        Warn "Khong the gan DNS tren mot so card mang."
+                    }
+                    Start-Sleep -Milliseconds 400
+                    break
+                }
+            }
+        }
+        else {
+            $num = 0
+            if ([int]::TryParse($ans, [ref]$num) -and $num -ge 1 -and $num -le $script:DnsPresets.Count) {
+                $preset = $script:DnsPresets | Where-Object { $_.Id -eq $num } | Select-Object -First 1
+                if ($preset) {
+                    Say ''
+                    Info "Dang gan $($preset.Name) ($($preset.P1), $($preset.P2))..."
+                    if (Set-CustomDns $preset.Name $preset.Short @($preset.P1, $preset.P2)) {
+                        Ok "Da chuyen sang: $($preset.Name)!"
+                    } else {
+                        Warn "Khong the gan DNS tren mot so card mang."
+                    }
+                    Start-Sleep -Milliseconds 400
+                    break
+                }
+            }
+        }
     }
+}
+
+function Show-StatusBar {
     Say ''
+    Say "  [>] STEAM ACCESS FIX v$script:AppVersion" 'Cyan'
     Sep
-    Say '  Huong dan:' 'Cyan'
-    Say '  - Mo Steam / Game de choi binh thuong.' 'White'
-    Say '  - GIU CUA SO NAY MO trong suot qua trinh choi game neu dung SplitProxy.' 'Yellow'
+
+    $rem = if ('FastUpdater' -as [type]) { [FastUpdater]::RemoteVersion } else { $null }
+    if ($rem) {
+        $isNew = $false
+        try { if ([version]$rem -gt [version]$script:AppVersion) { $isNew = $true } } catch { if ($rem -ne $script:AppVersion) { $isNew = $true } }
+        if ($isNew) {
+            Say "  [*] CO PHIEN BAN MOI: v$rem (Bam U de cap nhat)" 'Yellow'
+            Sep
+        }
+    }
+
+    Say '  [*] CHE DO DANG HOAT DONG:' 'Green'
+    if ($script:CurrentLevel -eq 2) {
+        Say "      > Che do:  Cap do 2 - SplitProxy SNI (Port $($script:CongDangDung))" 'Green'
+    } else {
+        Say '      > Che do:  Cap do 1 - DNS Only (Khong dung Proxy)' 'Green'
+    }
+    if ($script:DnsMode -eq 'Keep') {
+        Say '      > DNS:     Giu nguyen DNS he thong' 'Yellow'
+    } else {
+        Say "      > DNS:     $($script:CurrentDnsName) ($($script:CurrentDnsServers -join ', '))" 'White'
+    }
+    if ($script:DaThayDoiMtu) {
+        Say "      > MTU:     $($script:CurrentMtu) (Toi uu PPPoE chong phan manh)" 'Cyan'
+    }
+    if ('GameWatcher' -as [type]) {
+        Say '      > Auto-Hook: Tu dong xoa cache DNS khi mo Game (PUBG, CS2, Steam)' 'DarkCyan'
+    }
+
+    if ($script:CurrentLevel -eq 2) {
+        Sep
+        Say '  Luu y:' 'Cyan'
+        Say '  - GIU CUA SO NAY MO trong suot qua trinh choi game (hoac bam M de thu nho).' 'Yellow'
+    }
+
     Sep
-    Say '  Phim tat dieu khien:' 'DarkCyan'
-    Say '  [1]      Chay Cap do 1 - DNS Google only (tat Proxy)' 'White'
-    Say '  [2]      Chay Cap do 2 - SplitProxy SNI (vuot chan manh hon)' 'White'
-    if ($script:DnsMode -eq 'Google') { $dnsTxt = 'Doi Google DNS (8.8.8.8) [Mac dinh]' } else { $dnsTxt = 'GIU NGUYEN DNS he thong [An toan IP tinh]' }
-    Say "  [D]      Che do DNS: $dnsTxt (Bam D de chuyen doi)" 'White'
-    Say '  [K]      Giu lai DNS & toi uu Ping vinh vien roi thoat' 'White'
-    if (Test-Autostart) { $asTxt = 'DANG BAT' } else { $asTxt = 'DANG TAT' }
-    Say "  [A]      Bat/Tat tu khoi dong NGAM cung Windows (hien tai: $asTxt)" 'White'
-    Say '  [R]      KHOI PHUC MANG SACH 100% & thoat ngay' 'Yellow'
-    Say '  [Enter]  Khoi phuc cai dat va thoat an toan (hoac go Q)' 'White'
+    Say '  Phim tat:' 'DarkCyan'
+    if ($script:CurrentLevel -eq 1) {
+        Write-Host '  [1]      Cap do 1 (Chi DNS)            ' -ForegroundColor White -NoNewline
+        Write-Host '[Dang dung]' -ForegroundColor Green
+        Say        '  [2]      Cap do 2 (SplitProxy)' 'White'
+    } else {
+        Say        '  [1]      Cap do 1 (Chi DNS)' 'White'
+        Write-Host '  [2]      Cap do 2 (SplitProxy)         ' -ForegroundColor White -NoNewline
+        Write-Host '[Dang dung]' -ForegroundColor Green
+    }
+    Write-Host '  [D]      Doi DNS: Chon / Test Ping     ' -ForegroundColor White -NoNewline
+    if ($script:DnsMode -eq 'Keep') {
+        Write-Host '[He thong]' -ForegroundColor Yellow
+    } else {
+        Write-Host "[$($script:CurrentDnsShort)]" -ForegroundColor Cyan
+    }
+
+    Write-Host '  [T]      Toi uu MTU duong truyen Game  ' -ForegroundColor White -NoNewline
+    if ($script:DaThayDoiMtu) { Write-Host "[$($script:CurrentMtu)]" -ForegroundColor Green }
+    else                      { Write-Host '[Mac dinh]' -ForegroundColor DarkGray }
+
+    Say        '  [M]      Thu nho xuong khay he thong   [Tray]' 'White'
+
+    Write-Host '  [A]      Khoi dong cung Windows        ' -ForegroundColor White -NoNewline
+    if (Test-Autostart) { Write-Host '[Bat]' -ForegroundColor Green }
+    else                { Write-Host '[Tat]' -ForegroundColor DarkGray }
+
+    Say '  [K]      Luu DNS vinh vien va Thoat' 'White'
+    Say '  [R]      Khoi phuc mang goc va Thoat' 'Yellow'
+    Say '  [Enter]  Thoat' 'DarkGray'
     Sep
     Say ''
 }
@@ -1163,7 +1715,7 @@ function Sanitize-Environment {
         } catch { }
     }
 
-    if ($hasIssue -or (Test-Path $FileDns) -or (Test-Path $FileProxy) -or (Test-Path $FileHosts) -or (Test-Path $FileNetTweaks)) {
+    if ($hasIssue -or (Test-Path $FileDns) -or (Test-Path $FileProxy) -or (Test-Path $FileHosts) -or (Test-Path $FileNetTweaks) -or (Test-Path $FileMtu)) {
         Warn 'Phat hien cai dat mang chua dong dung cach (hoac ton dong tu ban cu) - dang tu dong khoi phuc...'
         Restore-All
         Start-Sleep -Milliseconds 600
@@ -1204,7 +1756,7 @@ function Install-Autostart {
             Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$($script:GitHubRepo)/main/SteamAccessFix.cmd" -OutFile $dst -TimeoutSec 20 -EA Stop
         }
 
-        $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$env:SELF=''__DST__''; $env:SAF_ARGS=''/silent''; $s=[IO.File]::ReadAllText($env:SELF,[Text.Encoding]::UTF8); $i=$s.IndexOf(''#PSBEGIN''+ ''#''); iex $s.Substring($i)"'
+        $arg = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$env:SELF=''__DST__''; $env:SAF_ARGS=''/silent''; Invoke-Expression ([System.IO.File]::ReadAllText($env:SELF, [System.Text.Encoding]::UTF8))"'
         $arg = $arg.Replace('__DST__', $dst)
 
         $user = "$env:USERDOMAIN\$env:USERNAME"
@@ -1311,6 +1863,7 @@ function Run-Silent {
     Apply-GamingNetworkTweaks
     if (Start-ProxyMode 2) { $script:CurrentLevel = 2; Write-Log 'SplitProxy Cap do 2 dang chay' }
     else                   { $script:CurrentLevel = 1; Write-Log 'Khong mo duoc proxy - chi chay DNS Google' }
+    if ('GameWatcher' -as [type]) { [GameWatcher]::Start() }
 
     # Cho lenh dung (tu [1]/[X] o cua so khac hoac /stop)
     while (-not (Test-Path $FileStop)) { Start-Sleep -Seconds 2 }
@@ -1444,23 +1997,31 @@ try {
     if ('NativeCleanup' -as [type]) {
         [NativeCleanup]::Register()
     }
+    if ('ConsoleHelper' -as [type]) {
+        [ConsoleHelper]::DisableQuickEdit()
+    }
+    if ('GameWatcher' -as [type]) {
+        [GameWatcher]::Start()
+    }
+    if ('FastUpdater' -as [type]) {
+        [FastUpdater]::CheckAsync($script:GitHubRepo)
+    }
 
     if ($script:Silent) {
         Run-Silent
     }
     else {
-        Ve-Khung "  SteamAccessFix v$script:AppVersion  -  Game Connectivity Fix"
+        Say ''
+        Say "  [>] STEAM ACCESS FIX v$script:AppVersion" 'Cyan'
+        Sep
 
         # Don dep phien truoc neu bi tat dot ngot
         Sanitize-Environment
 
-        Check-GitHubUpdate
-        Sep
-
         # 1. Thiet lap DNS theo che do
         if ($script:DnsMode -eq 'Google') {
-            Info 'Dang gan DNS Google (8.8.8.8 & IPv6)...'
-            if (Set-GoogleDns) { Ok 'Da gan DNS: 8.8.8.8  &  2001:4860:4860::8888' }
+            Info 'Dang gan DNS Google (8.8.8.8)...'
+            if (Set-GoogleDns) { Ok 'Da gan DNS Google: 8.8.8.8  &  8.8.4.4' }
             else               { Warn 'Mot so card mang khong nhan DNS Google (xem DNS hien tai ben duoi).' }
         } else {
             Info 'Che do DNS: GIU NGUYEN DNS he thong (khong can thiep DNS card mang).'
@@ -1482,29 +2043,36 @@ try {
             Warn 'Khong khoi dong duoc proxy. Dang chay Cap do 1 (DNS Google).'
         }
 
+        Start-Sleep -Milliseconds 150
+        try { Clear-Host } catch { }
         Show-StatusBar
 
         while ($true) {
-            Write-Host '  Lua chon [1 / 2 / D / K / R / A / Enter=Thoat]: ' -ForegroundColor Yellow -NoNewline
+            Write-Host '  Lua chon [1 / 2 / D / T / M / A / K / R / Enter]: ' -ForegroundColor Yellow -NoNewline
             $k = Read-Host
 
-            if ($k -match '^[dD]') {
+            if ($k -match '^[uU]') {
                 Say ''
-                if ($script:DnsMode -eq 'Google') {
-                    $script:DnsMode = 'Keep'
-                    Info 'Dang hoan tra DNS ve gia tri goc cua he thong...'
-                    Restore-Dns
-                    $script:DaThayDoiDns = $false
-                    Ok 'Da chuyen sang che do: GIU NGUYEN DNS he thong.'
-                    Info 'Tool se KHONG can thiep DNS cua card mang (khuyen dung cho IP tinh).'
-                } else {
-                    $script:DnsMode = 'Google'
-                    Info 'Dang gan DNS Google (8.8.8.8)...'
-                    if (Set-GoogleDns) { Ok 'Da chuyen sang che do: Google DNS (8.8.8.8).' }
-                    else               { Warn 'Khong the gan Google DNS tren mot so card mang.' }
-                }
-                Show-Dns
-                Say ''
+                Update-FromGitHub
+                Start-Sleep -Milliseconds 200
+                try { Clear-Host } catch { }
+                Show-StatusBar
+            }
+            elseif ($k -match '^[dD]') {
+                Show-DnsMenu
+                try { Clear-Host } catch { }
+                Show-StatusBar
+            }
+            elseif ($k -match '^[tT]') {
+                Optimize-Mtu
+                Start-Sleep -Milliseconds 1200
+                try { Clear-Host } catch { }
+                Show-StatusBar
+            }
+            elseif ($k -match '^[mM]') {
+                $action = Minimize-ToTray
+                if ($action -eq 'exit') { break }
+                try { Clear-Host } catch { }
                 Show-StatusBar
             }
             elseif ($k -eq '2') {
@@ -1516,22 +2084,27 @@ try {
                 } else {
                     Err 'Khong khoi dong duoc SplitProxy.'
                 }
-                Say ''
+                Start-Sleep -Milliseconds 200
+                try { Clear-Host } catch { }
                 Show-StatusBar
             }
             elseif ($k -eq '1') {
                 Say ''
-                Info 'Dang chuyen ve Cap do 1 (DNS Google only)...'
+                Info "Dang chuyen ve Cap do 1 ($($script:CurrentDnsName) only)..."
                 Stop-ProxyMode
                 $script:CurrentLevel = 1
-                $script:MoTa = 'DNS Google (8.8.8.8) + Toi uu Ping Game'
-                Ok 'Da tat Proxy. Dang chay Cap do 1 (DNS Google only).'
-                Say ''
+                $script:MoTa = "$($script:CurrentDnsName) + Toi uu Ping Game"
+                Ok "Da tat Proxy. Dang chay Cap do 1 ($($script:CurrentDnsName))."
+                Start-Sleep -Milliseconds 200
+                try { Clear-Host } catch { }
                 Show-StatusBar
             }
             elseif ($k -match '^[kK]') {
+                try { Clear-Host } catch { }
                 Say ''
-                Info 'Da chon giu lai DNS Google va toi uu Ping.'
+                Say "  [>] STEAM ACCESS FIX v$script:AppVersion" 'Cyan'
+                Sep
+                Info "Da chon giu lai $($script:CurrentDnsName) va toi uu Ping."
                 # Luu ban sao DNS goc (chi lan dau) de [R] van tra lai duoc sau nay
                 if ((Test-Path $FileDns) -and -not (Test-Path $FileDnsKeep)) { Copy-Item $FileDns $FileDnsKeep -Force -EA SilentlyContinue }
                 $script:DaThayDoiDns    = $false
@@ -1539,13 +2112,17 @@ try {
                 if (Test-Path $FileDns)       { Remove-Item $FileDns       -Force -EA SilentlyContinue }
                 if (Test-Path $FileNetTweaks) { Remove-Item $FileNetTweaks -Force -EA SilentlyContinue }
                 Stop-ProxyMode
-                Ok 'DNS Google & toi uu Ping da duoc luu vinh vien tren may.'
+                Ok "$($script:CurrentDnsName) & toi uu Ping da duoc luu vinh vien tren may."
                 Show-Dns
                 Info 'Muon tra DNS ve nhu ban dau: mo lai tool va bam [R].'
+                Sep
                 break
             }
             elseif ($k -match '^[rR]') {
+                try { Clear-Host } catch { }
                 Say ''
+                Say "  [>] STEAM ACCESS FIX v$script:AppVersion" 'Cyan'
+                Sep
                 Info 'Dang khoi phuc mang he thong sach 100% va go bo moi thiet lap...'
                 Restore-All
                 if (Test-Path $FileDnsKeep) {
@@ -1554,28 +2131,34 @@ try {
                     Show-Dns
                 }
                 # Chi xoa file backup/trang thai; GIU lai ban chay ngam (SteamAccessFix.cmd) neu dang bat
-                foreach ($f in @($FileDns, $FileProxy, $FileHosts, $FileNetTweaks, $FileDnsKeep)) { Remove-Item $f -Force -EA SilentlyContinue }
+                foreach ($f in @($FileDns, $FileProxy, $FileHosts, $FileNetTweaks, $FileMtu, $FileDnsKeep)) { Remove-Item $f -Force -EA SilentlyContinue }
                 Ok 'He thong da duoc khoi phuc sach se hoan toan!'
+                Sep
                 Start-Sleep -Seconds 1
                 break
             }
             elseif ($k -match '^[aA]') {
                 Say ''
                 if (Test-Autostart) { Uninstall-Autostart } else { [void](Install-Autostart) }
-                Say ''
+                Start-Sleep -Milliseconds 200
+                try { Clear-Host } catch { }
                 Show-StatusBar
             }
             elseif ($k -match '^[qQ]' -or [string]::IsNullOrWhiteSpace($k)) {
                 break
             }
             else {
+                try { Clear-Host } catch { }
                 Show-StatusBar
             }
         }
     }
 }
 finally {
-    if ($script:DaThayDoiDns -or $script:DaThayDoiProxy -or $script:DaThayDoiHosts -or $script:DaThayDoiTweaks) {
+    if ('GameWatcher' -as [type]) {
+        [GameWatcher]::Stop()
+    }
+    if ($script:DaThayDoiDns -or $script:DaThayDoiProxy -or $script:DaThayDoiHosts -or $script:DaThayDoiTweaks -or $script:DaThayDoiMtu) {
         Say ''
         Sep
         Restore-All

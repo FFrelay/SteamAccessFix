@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="SteamAccessFix Logo" width="600">
+</p>
+
 <h1 align="center">SteamAccessFix (SAF)</h1>
 
 <p align="center">Công cụ mã nguồn mở dạng tập tin đơn (.cmd) giúp tự động khắc phục sự cố kết nối, mở khóa Steam (Store, Community, CDN), sửa lỗi màn hình đen / màn khói PUBG, hỗ trợ định tuyến Naraka & Delta Force, và tối ưu ping cho game thủ trên Windows 10 và 11.</p>
@@ -6,19 +10,23 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-blue?logo=windows" alt="Windows Support">
   <img src="https://img.shields.io/badge/Driver-Zero%20Dependency-brightgreen" alt="No Drivers">
   <img src="https://img.shields.io/badge/Anti--Cheat-100%25%20Safe-success" alt="Anti-Cheat Safe">
-  <img src="https://img.shields.io/badge/Version-1.1.5-orange" alt="Version 1.1.5">
+  <img src="https://img.shields.io/badge/Version-1.2.0-orange" alt="Version 1.2.0">
   <img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License">
 </p>
 
 <hr>
 
-## Có gì mới ở v1.1.5
+## Có gì mới ở v1.2.0
 
-- **Phím [D] - Tùy chọn Giữ nguyên DNS hệ thống (`/nodns`)**: Giữ nguyên 100% DNS/IP tĩnh ban đầu, loại bỏ hoàn toàn lỗi mất mạng cho máy dùng IP tĩnh hoặc mạng nội bộ.
-- **Phím [A] - Tự khởi động ngầm cùng Windows (`/install` | `/uninstall`)**: Tùy chọn chạy ẩn tự động khi đăng nhập, không hiện cửa sổ, không hỏi UAC.
-- **Chống mở trùng (Single-Instance)**: Khóa Mutex ngăn chặn việc chạy đè nhiều bản gây xung đột.
-- **Vá triệt để lỗi mất kết nối server PUBG**: Xử lý phân mảnh TLS handshake (TCP MSS 1460 bytes) ở Port 443 Sniper, tăng timeout lên 15s và nâng cache DNS chống rớt mạng giữa trận.
-- **Sửa lỗi khởi động**: Khắc phục lỗi mã hóa UTF-8 BOM (`∩╗┐`), lỗi gọi hàm tham số và cơ chế kiểm tra cập nhật.
+- **Bảng đo Ping & Lựa chọn Top 10 DNS Toàn cầu (Phím [D])**: Tự động đo ping đa luồng song song ICMP siêu tốc (~70ms) tới 10 máy chủ DNS uy tín nhất thế giới (Google, Cloudflare, Control D, Quad9, OpenDNS, AdGuard, NextDNS, AliDNS, DNS.SB, Comodo). Cho phép tự do lựa chọn theo ping thực tế trên màn hình, phím tắt `[F]` chọn nhanh DNS nhanh nhất, phím tắt `[0]` trả về DNS gốc của hệ thống (an toàn tuyệt đối cho máy dùng IP tĩnh/LAN).
+- **Bộ tự động tìm MTU tối ưu (Auto MTU Tuning - Phím [T])**: Thuật toán nhị phân ICMP Don't Fragment (~40ms) tự động tìm kích thước MTU tối đa không bị phân mảnh gói tin trên đường truyền PPPoE (VNPT/FPT/Viettel), giúp đạn bay và nhận diện trúng đích (hitreg) ổn định hơn, triệt tiêu giật lag và ping spike trong PUBG, CS2.
+- **Thu nhỏ xuống khay hệ thống (Minimize to System Tray - Phím [M])**: Ẩn cửa sổ console xuống khay đồng hồ Windows khi đang chơi game để tránh vướng víu hoặc vô tình bấm nhầm tắt. Click đúp vào biểu tượng khay để mở lại ngay lập tức.
+- **Tự động làm sạch DNS Cache khi mở Game (Game Launch Hook)**: Module watcher chạy ngầm siêu nhẹ tự động phát hiện khi PUBG (`TslGame.exe`), Steam, CS2, Dota 2, Naraka vừa khởi động để kích hoạt API Win32 `DnsFlushResolverCache()`, ngăn chặn triệt để tình trạng dính IP cache bị chặn từ nhà mạng.
+- **Khởi động siêu tốc & Tối ưu hóa toàn diện (<0.5s)**: Tăng tốc khởi động gấp 15 lần (từ ~8.5s xuống <0.5s) bằng cách caching card mạng, thay thế các tiến trình ngoài bằng Win32 API native (`DnsFlushResolverCache`, `InternetSetOption`), kiểm tra cập nhật GitHub bất đồng bộ (`FastUpdater.CheckAsync()`).
+- **Lưới an toàn tuyệt đối cho mạng IP tĩnh (`Ensure-StaticDns` & `Set-DnsSafe`)**: Khắc phục triệt để lỗi mất mạng khi thoát tool trên các máy đặt LAN IP tĩnh (như phản hồi ở bản 1.1.4 cũ). Tự động điền Default Gateway + 8.8.8.8 nếu DNS bị trống, tuyệt đối không bao giờ để trắng DNS.
+- **Giao diện người dùng (UI/UX) làm mới**: Bảng trạng thái trực quan, căn chỉnh ngay ngắn, đồng bộ định dạng `[Dang dung]`, lược bỏ các thông báo rườm rà.
+
+---
 
 ## Tính năng cốt lõi
 
@@ -67,7 +75,7 @@ Công cụ tuân theo nguyên tắc **thử từ nhẹ đến nâng cao** và **
 | Cấp độ | Phương pháp | Cơ chế kỹ thuật |
 | :--- | :--- | :--- |
 | **Level 0** | **Kiểm tra ban đầu** | Kiểm tra kết nối tới máy chủ Steam và PUBG. Nếu mạng đã hoạt động bình thường, công cụ chỉ áp dụng tinh chỉnh network giảm ping và không can thiệp sâu. |
-| **Level 1** | **DNS Google + IPv6** | Gán DNS Google (`8.8.8.8` & IPv6 `2001:4860:4860::8888`), xóa cache DNS để chặn triệt để tình trạng DNS poisoning từ modem/nhà mạng. |
+| **Level 1** | **DNS Google (hoặc Top 10 DNS)** | Gán DNS công cộng chất lượng cao (Google, Cloudflare, Quad9...), xóa cache DNS để chặn triệt để tình trạng DNS poisoning từ modem/nhà mạng. |
 | **Level 2** | **SplitProxy (SNI Fragmentation)** | Khởi chạy proxy nội bộ (C# nhúng sẵn). Phân mảnh gói tin TLS `ClientHello` (chia tách SNI) để vô hiệu hóa tường lửa DPI của nhà mạng FPT/VNPT. |
 | **Level 3** | **DoH Fallback** | Truy vấn IP máy chủ gốc trực tiếp từ Cloudflare/Google qua DNS-over-HTTPS, hỗ trợ gán tạm thời vào file hosts nếu cần. |
 
@@ -83,11 +91,13 @@ Công cụ tuân theo nguyên tắc **thử từ nhẹ đến nâng cao** và **
 ---
 
 > [!TIP]
-> - **Hãy giữ cửa sổ console mở** trong suốt quá trình chơi game hoặc duyệt Steam nếu công cụ đang chạy ở chế độ `Level 2 (SplitProxy)`.
+> - **Hãy giữ cửa sổ console mở** trong suốt quá trình chơi game hoặc duyệt Steam nếu công cụ đang chạy ở chế độ `Level 2 (SplitProxy)` (hoặc bấm `[M]` để thu nhỏ xuống khay đồng hồ).
 > - **Phím tắt điều khiển linh hoạt:**
->   - Gõ `1` + Enter: **Chạy Cấp độ 1** (Google DNS + Tối ưu Ping, tắt Proxy).
+>   - Gõ `1` + Enter: **Chạy Cấp độ 1** (DNS + Tối ưu Ping, tắt Proxy).
 >   - Gõ `2` + Enter: **Chạy Cấp độ 2** (SplitProxy SNI Fragmentation vượt chặn mạnh).
->   - Gõ `D` + Enter: **Chuyển chế độ DNS** (Google DNS / Giữ nguyên DNS hệ thống cho IP tĩnh).
+>   - Gõ `D` + Enter: **Bảng đo Ping & Chọn Top 10 DNS** (hoặc `0` để trả về DNS gốc cho IP tĩnh).
+>   - Gõ `T` + Enter: **Tự động tìm & Tối ưu MTU cho game** (chống phân mảnh gói tin PPPoE).
+>   - Gõ `M` + Enter: **Thu nhỏ xuống khay hệ thống (System Tray)** để không vướng màn hình khi chơi game.
 >   - Gõ `A` + Enter: **Bật / Tắt tự khởi động NGẦM** cùng Windows (Task Scheduler).
 >   - Gõ `K` + Enter: **Giữ lại (Keep)** thiết lập DNS và tinh chỉnh network trên máy rồi thoát.
 >   - Gõ `R` + Enter: **Khôi phục mạng sạch 100% & Gỡ bỏ mọi thiết lập** rồi thoát ngay.
@@ -96,5 +106,5 @@ Công cụ tuân theo nguyên tắc **thử từ nhẹ đến nâng cao** và **
 ---
 
 <p align="center">
-  <b>Phiên bản hiện tại:</b> 1.1.5 &bull; <b>Tác giả:</b> <a href="https://github.com/vuviett47">vuviett47</a>
+  <b>Phiên bản hiện tại:</b> 1.2.0 &bull; <b>Tác giả:</b> <a href="https://github.com/vuviett47">vuviett47</a>
 </p>
