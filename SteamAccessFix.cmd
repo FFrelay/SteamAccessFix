@@ -687,6 +687,35 @@ public class NativeCleanup
                 ConsoleHelper.InternetSetOption(IntPtr.Zero, 39, IntPtr.Zero, 0);
                 ConsoleHelper.InternetSetOption(IntPtr.Zero, 37, IntPtr.Zero, 0);
             } catch { }
+
+            try {
+                string progData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SteamAccessFix");
+                string inst = Path.Combine(progData, "instance.txt");
+                if (File.Exists(inst)) File.Delete(inst);
+            } catch { }
+
+            try {
+                string hosts = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"drivers\etc\hosts");
+                if (File.Exists(hosts)) {
+                    var lines = File.ReadAllLines(hosts);
+                    bool hasSaf = false;
+                    var clean = new List<string>();
+                    foreach (var l in lines) {
+                        if (l.IndexOf("# SteamAccessFix", StringComparison.OrdinalIgnoreCase) >= 0) {
+                            hasSaf = true;
+                        } else {
+                            clean.Add(l);
+                        }
+                    }
+                    if (hasSaf) {
+                        var attr = File.GetAttributes(hosts);
+                        bool isRo = (attr & FileAttributes.ReadOnly) != 0;
+                        if (isRo) File.SetAttributes(hosts, attr & ~FileAttributes.ReadOnly);
+                        File.WriteAllLines(hosts, clean.ToArray());
+                        if (isRo) File.SetAttributes(hosts, attr);
+                    }
+                }
+            } catch { }
         }
         return false;
     }
@@ -1263,7 +1292,23 @@ function Apply-PubgHosts {
         $cur = if (Test-Path $FileHostsSys) { @(Get-Content $FileHostsSys -Encoding ASCII -EA SilentlyContinue) } else { @() }
         $filtered = @($cur | Where-Object { $_ -notmatch '#\s*SteamAccessFix' })
         $newContent = ($filtered + $linesToAdd) -join "`r`n"
+
+        $isRo = $false
+        $origAttr = [System.IO.FileAttributes]::Normal
+        if (Test-Path $FileHostsSys) {
+            $origAttr = [System.IO.File]::GetAttributes($FileHostsSys)
+            $isRo = [bool]($origAttr -band [System.IO.FileAttributes]::ReadOnly)
+            if ($isRo) {
+                [System.IO.File]::SetAttributes($FileHostsSys, $origAttr -band (-bnot [System.IO.FileAttributes]::ReadOnly))
+            }
+        }
+
         [IO.File]::WriteAllText($FileHostsSys, $newContent + "`r`n", [Text.Encoding]::ASCII)
+
+        if ($isRo) {
+            try { [System.IO.File]::SetAttributes($FileHostsSys, $origAttr) } catch { }
+        }
+
         Flush-DnsCache
         $script:DaThayDoiHosts = $true
         return $true
@@ -1274,19 +1319,37 @@ function Apply-PubgHosts {
 
 function Save-Hosts {
     if (Test-Path $FileHosts) { return }
-    if (Test-Path $FileHostsSys) { Copy-Item -Path $FileHostsSys -Destination $FileHosts -Force }
+    if (Test-Path $FileHostsSys) {
+        Copy-Item -Path $FileHostsSys -Destination $FileHosts -Force -EA SilentlyContinue
+        if (Test-Path $FileHosts) {
+            try { [System.IO.File]::SetAttributes($FileHosts, [System.IO.FileAttributes]::Normal) } catch { }
+        }
+    }
 }
 
 function Restore-Hosts {
     if (Test-Path $FileHostsSys) {
         try {
+            $origAttr = [System.IO.File]::GetAttributes($FileHostsSys)
+            $isRo = [bool]($origAttr -band [System.IO.FileAttributes]::ReadOnly)
+            if ($isRo) {
+                [System.IO.File]::SetAttributes($FileHostsSys, $origAttr -band (-bnot [System.IO.FileAttributes]::ReadOnly))
+            }
+
             $lines = @(Get-Content $FileHostsSys -EA SilentlyContinue | Where-Object { $_ -notmatch '#\s*SteamAccessFix' })
             [IO.File]::WriteAllLines($FileHostsSys, [string[]]$lines, [Text.Encoding]::ASCII)
+
+            if ($isRo) {
+                try { [System.IO.File]::SetAttributes($FileHostsSys, $origAttr) } catch { }
+            }
             Flush-DnsCache
         } catch { }
     }
     if (Test-Path $FileHosts) {
-        Remove-Item $FileHosts -Force -EA SilentlyContinue
+        try { [System.IO.File]::SetAttributes($FileHosts, [System.IO.FileAttributes]::Normal) } catch { }
+        try { [System.IO.File]::Delete($FileHosts) } catch {
+            Remove-Item $FileHosts -Force -EA SilentlyContinue
+        }
     }
     $script:DaThayDoiHosts = $false
 }
@@ -1814,7 +1877,10 @@ function Release-Instance {
         try { $script:Mutex.ReleaseMutex() } catch { }
         $script:MutexOwned = $false
     }
-    Remove-Item $FileInst -Force -EA SilentlyContinue
+    if (Test-Path $FileInst) {
+        try { [System.IO.File]::SetAttributes($FileInst, [System.IO.FileAttributes]::Normal) } catch { }
+        Remove-Item $FileInst -Force -EA SilentlyContinue
+    }
 }
 
 # Gui lenh dung cho ban chay ngam (qua stop.flag), doi toi khi no nha khoa -> ta giu khoa
@@ -2131,7 +2197,12 @@ try {
                     Show-Dns
                 }
                 # Chi xoa file backup/trang thai; GIU lai ban chay ngam (SteamAccessFix.cmd) neu dang bat
-                foreach ($f in @($FileDns, $FileProxy, $FileHosts, $FileNetTweaks, $FileMtu, $FileDnsKeep)) { Remove-Item $f -Force -EA SilentlyContinue }
+                foreach ($f in @($FileDns, $FileProxy, $FileHosts, $FileNetTweaks, $FileMtu, $FileDnsKeep)) {
+                    if (Test-Path $f) {
+                        try { [System.IO.File]::SetAttributes($f, [System.IO.FileAttributes]::Normal) } catch { }
+                        Remove-Item $f -Force -EA SilentlyContinue
+                    }
+                }
                 Ok 'He thong da duoc khoi phuc sach se hoan toan!'
                 Sep
                 Start-Sleep -Seconds 1
